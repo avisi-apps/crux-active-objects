@@ -7,13 +7,12 @@
             [clojure.core.async :as async]
             [crux.io :as cio]
             [clojure.tools.logging :as log])
-  (:import
-   [java.util Date]
-   [java.io Closeable]
-   [crux.api ICruxAPI]
-   [net.java.ao Query EntityStreamCallback]
-   [com.atlassian.activeobjects.external ActiveObjects]
-   [avisi.crux.tx EventLogEntry]))
+  (:import [java.util Date]
+           [java.io Closeable]
+           [crux.api ICruxAPI]
+           [net.java.ao Query EntityStreamCallback]
+           [com.atlassian.activeobjects.external ActiveObjects]
+           [avisi.crux.tx EventLogEntry]))
 
 (set! *warn-on-reflection* true)
 

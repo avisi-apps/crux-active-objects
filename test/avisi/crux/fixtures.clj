@@ -1,5 +1,5 @@
 (ns avisi.crux.fixtures
-  (:require [clojure.test :as t]
+  (:require [avisi.crux.bootstrap.active-objects :as b]
             [crux.io :as cio])
   (:import [net.java.ao EntityManager]
            [com.atlassian.activeobjects.external ActiveObjects]
@@ -7,7 +7,6 @@
            [avisi.crux.tx EventLogEntry]
            [net.java.ao.atlassian TablePrefix AtlassianFieldNameConverter AtlassianUniqueNameConverter AtlassianSequenceNameConverter AtlassianIndexNameConverter AtlassianTableNameConverter]
            [net.java.ao.builder EntityManagerBuilder]
-           [java.io File]
            [crux.api ICruxAPI]))
 
 (def ^:dynamic ^ICruxAPI *api* nil)
@@ -32,9 +31,9 @@
         ao ^ActiveObjects (TestActiveObjects. manager)]
     (.migrate ^ActiveObjects ao (into-array Class [EventLogEntry]))
     (try
-      (with-open [standalone-node (avisi.crux.bootstrap.active-objects/start-ao-node {:ao ao
-                                                                           :kv-backend "crux.kv.memdb.MemKv"
-                                                                           :db-dir db-dir})]
+      (with-open [standalone-node (b/start-ao-node {:ao ao
+                                                    :kv-backend "crux.kv.memdb.MemKv"
+                                                    :db-dir db-dir})]
         (binding [*api* standalone-node]
           (f)))
       (finally

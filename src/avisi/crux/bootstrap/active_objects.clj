@@ -43,14 +43,14 @@
                               (.where "ID >= ?" (into-array Object [start-offset])))
                    (reify EntityStreamCallback
                      (onRowRead [_ t]
-                       (when @running?
-                         ;; Needed because hinting the onRowRead breaks Clojure finding the interface impl
-                         (let [entry ^EventLogEntry t]
-                           (let [tx-time (Date. ^long (.getTime entry))]
-                             (log/debug "reading new entry in event log" {:body (.getBody entry)
-                                                                          :key (.getKey entry)
-                                                                          :id (.getID entry)
-                                                                          :tx-time tx-time})
+                      ;; Needed because hinting the onRowRead breaks Clojure finding the interface impl
+                       (let [entry ^EventLogEntry t]
+                         (let [tx-time (Date. ^long (.getTime entry))]
+                           (log/debug "reading new entry in event log" {:body (.getBody entry)
+                                                                        :key (.getKey entry)
+                                                                        :id (.getID entry)
+                                                                        :tx-time tx-time})
+                           (when @running
                              (case (.getTopic entry)
                                "doc" (db/index-doc indexer
                                                    (.getKey entry)
@@ -59,9 +59,9 @@
                                      indexer
                                      (ao-tx-log/str->clj (.getBody entry))
                                      tx-time
-                                     (.getID entry)))
-                             (vreset! end-time tx-time)
-                             (vreset! ended-offset (.getID entry))))))))
+                                     (.getID entry))))
+                           (vreset! end-time tx-time)
+                           (vreset! ended-offset (.getID entry)))))))
           (log/debug "Done streaming from event-log to-offset=" (or @ended-offset start-offset))
           (when (and @running? (some? @end-time) (some? @ended-offset))
             (let [end-offset (highest-id ao)
@@ -106,6 +106,8 @@
     (reify Closeable
       (close [_]
         (reset! running? false)
+       ;; Put twice so it will block on the second stop message
+        (async/>!! stop-ch :stop)
         (async/>!! stop-ch :stop)))))
 
 (defn start-ao-node ^ICruxAPI [{:keys [ao db-dir doc-cache-size] :as options
@@ -126,5 +128,5 @@
                       :event-log-consumer event-log-consumer
                       :options options
                       :close-fn (fn []
-                                  (doseq [c [tx-log event-log-consumer kv-store]]
+                                  (doseq [c [event-log-consumer tx-log kv-store]]
                                     (cio/try-close c)))})))

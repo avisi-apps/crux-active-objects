@@ -43,26 +43,27 @@
                               (.where "ID >= ?" (into-array Object [start-offset])))
                    (reify EntityStreamCallback
                      (onRowRead [_ t]
-                      ;; Needed because hinting the onRowRead breaks Clojure finding the interface impl
-                       (let [entry ^EventLogEntry t]
-                         (let [tx-time (Date. ^long (.getTime entry))]
-                           (log/debug "reading new entry in event log" {:body (.getBody entry)
-                                                                        :key (.getKey entry)
-                                                                        :id (.getID entry)
-                                                                        :tx-time tx-time})
-                           (case (.getTopic entry)
-                             "doc" (db/index-doc indexer
-                                                 (.getKey entry)
-                                                 (ao-tx-log/str->clj (.getBody entry)))
-                             "tx" (db/index-tx
-                                   indexer
-                                   (ao-tx-log/str->clj (.getBody entry))
-                                   tx-time
-                                   (.getID entry)))
-                           (vreset! end-time tx-time)
-                           (vreset! ended-offset (.getID entry)))))))
+                       (when @running?
+                         ;; Needed because hinting the onRowRead breaks Clojure finding the interface impl
+                         (let [entry ^EventLogEntry t]
+                           (let [tx-time (Date. ^long (.getTime entry))]
+                             (log/debug "reading new entry in event log" {:body (.getBody entry)
+                                                                          :key (.getKey entry)
+                                                                          :id (.getID entry)
+                                                                          :tx-time tx-time})
+                             (case (.getTopic entry)
+                               "doc" (db/index-doc indexer
+                                                   (.getKey entry)
+                                                   (ao-tx-log/str->clj (.getBody entry)))
+                               "tx" (db/index-tx
+                                     indexer
+                                     (ao-tx-log/str->clj (.getBody entry))
+                                     tx-time
+                                     (.getID entry)))
+                             (vreset! end-time tx-time)
+                             (vreset! ended-offset (.getID entry))))))))
           (log/debug "Done streaming from event-log to-offset=" (or @ended-offset start-offset))
-          (when (and (some? @end-time) (some? @ended-offset))
+          (when (and @running? (some? @end-time) (some? @ended-offset))
             (let [end-offset (highest-id ao)
                   next-offset (inc (long @ended-offset))
                   lag (- end-offset next-offset)

@@ -24,8 +24,7 @@
                                        (.limit 1)
                                        (.order "ID DESC"))))))
 
-(defn- event-log-consumer-main-loop [{:keys [indexer batch-size ^ActiveObjects ao running?]
-                                      :or {batch-size 100}}]
+(defn- event-log-consumer-main-loop [{:keys [indexer ^ActiveObjects ao running? listeners]}]
   (try
     (loop []
       (when @running?
@@ -74,13 +73,20 @@
                                    :time @end-time}}]
               (log/debug "Event log consumer state:" (pr-str consumer-state))
               (db/store-index-meta indexer :crux.tx-log/consumer-state consumer-state)
+              (run!
+               (fn [[k f]]
+                 (try
+                   (f consumer-state)
+                   (catch Exception e
+                     (log/error e "Calling listener failed" {:listener-key k}))))
+               listeners)
               (when (pos? lag)
                 (log/warn "Falling behind" ::event-log "at:" next-offset "end:" end-offset)
                 (recur)))))))
     (catch Exception e
       (log/error e "Unexpected failure while indexing"))))
 
-(defn start-event-log-consumer! ^Closeable [indexer ao input-ch]
+(defn start-event-log-consumer! ^Closeable [indexer tx-log]
   (log/info "Starting event-log-consumer")
 
   (when-not (db/read-index-meta indexer :crux.tx-log/consumer-state)
@@ -91,6 +97,7 @@
                                                       :time nil}}))
 
   (let [stop-ch (async/chan 1)
+        input-ch  (:input-ch tx-log)
         running? (atom true)]
     (async/go-loop []
       (let [[_ ch] (async/alts! [stop-ch input-ch (async/timeout 30000)])]
@@ -99,7 +106,8 @@
           (do
             (log/debug "trigger event log consumer main loop")
             (async/<! (async/thread (event-log-consumer-main-loop {:indexer indexer
-                                                                   :ao ao
+                                                                   :listeners @(:listeners tx-log)
+                                                                   :ao (:ao tx-log)
                                                                    :running? running?})))
             (recur)))))
     (async/put! input-ch 1)
@@ -119,9 +127,10 @@
         kv-store (b/start-kv-store options)
         object-store (lru/new-cached-object-store kv-store doc-cache-size)
         tx-log (ao-tx-log/map->ActiveObjectsTxLog {:ao ao
-                                                   :input-ch input-ch})
+                                                   :input-ch input-ch
+                                                   :listeners (atom {})})
         indexer (tx/->KvIndexer kv-store tx-log object-store)
-        event-log-consumer (start-event-log-consumer! indexer ao input-ch)]
+        event-log-consumer (start-event-log-consumer! indexer tx-log)]
     (b/map->CruxNode {:kv-store kv-store
                       :tx-log tx-log
                       :object-store object-store
@@ -131,3 +140,4 @@
                       :close-fn (fn []
                                   (doseq [c [event-log-consumer tx-log kv-store object-store]]
                                     (cio/try-close c)))})))
+

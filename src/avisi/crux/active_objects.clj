@@ -98,7 +98,7 @@
     (tx-seq ao (or from-tx-id 0)))
   TxListener
   (add-listener! [this k f]
-   (swap! listeners k f)
+   (swap! listeners assoc k f)
    nil)
   (remove-listener! [this k]
    (swap! listeners dissoc k)

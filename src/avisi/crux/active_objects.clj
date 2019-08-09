@@ -74,7 +74,11 @@
                                     (.where "ID >= ? AND TOPIC = ?" (into-array Object [start-offset "tx"])))))))]
      (concat ret (lazy-seq (tx-seq ao (inc (:crux.tx/tx-id (last ret)))))))))
 
-(defrecord ActiveObjectsTxLog [ao input-ch]
+(defprotocol TxListener
+  (add-listener! [this key f])
+  (remove-listener! [this key]))
+
+(defrecord ActiveObjectsTxLog [ao input-ch listeners]
   db/TxLog
   (submit-doc [this content-hash doc]
     (save-event-log-entry! ao ::doc (.toString content-hash) doc)
@@ -92,6 +96,13 @@
       (close [this])))
   (tx-log [this tx-log-context from-tx-id]
     (tx-seq ao (or from-tx-id 0)))
+  TxListener
+  (add-listener! [this k f]
+   (swap! listeners k f)
+   nil)
+  (remove-listener! [this k]
+   (swap! listeners dissoc k)
+   nil)
   Closeable
   (close [this]
     (.flushAll ao)))

@@ -24,10 +24,7 @@
                                        (.limit 1)
                                        (.order "ID DESC"))))))
 
-(def batch-size 10000)
-
-(defn- event-log-consumer-main-loop [{:keys [indexer batch-size ^ActiveObjects ao running? listeners]
-                                      :or {batch-size 100}}]
+(defn- event-log-consumer-main-loop [{:keys [indexer ^ActiveObjects ao running? listeners]}]
   (try
     (loop []
       (when @running?

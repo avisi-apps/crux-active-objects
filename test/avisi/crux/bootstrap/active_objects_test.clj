@@ -1,7 +1,7 @@
 (ns avisi.crux.bootstrap.active-objects-test
-  (:require [clojure.test :as t]
-            [avisi.crux.fixtures :refer [*api* with-ao-node]]
-            [crux.codec :as c])
+  (:require [avisi.crux.fixtures :refer [*api* with-ao-node]]
+            [crux.codec :as c]
+            [clojure.test :as t])
   (:import [java.time Duration]
            [java.util Date]
            [clojure.lang LazySeq]))
@@ -165,4 +165,4 @@
 
               ;; Not sure what this is exactly
               (let [stats (.attributeStats *api*)]
-                  (t/is (= 0 (:name stats)))))))))))
+                (t/is (= 0 (:name stats)))))))))))

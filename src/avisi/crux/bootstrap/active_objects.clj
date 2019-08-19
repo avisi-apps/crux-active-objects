@@ -24,6 +24,8 @@
                                        (.limit 1)
                                        (.order "ID DESC"))))))
 
+(def batch-limit 10000)
+
 (defn- event-log-consumer-main-loop [{:keys [indexer ^ActiveObjects ao running? listeners]}]
   (try
     (loop []
@@ -37,7 +39,7 @@
           (.stream ao
                    ^Class EventLogEntry
                    ^Query (-> (Query/select "ID, TOPIC, TIME, BODY, KEY")
-                              (.limit 10000)
+                              (.limit batch-limit)
                               (.order "ID ASC")
                               (.where "ID >= ?" (into-array Object [start-offset])))
                    (reify EntityStreamCallback
@@ -80,8 +82,9 @@
                    (catch Exception e
                      (log/error e "Calling listener failed" {:listener-key k}))))
                listeners)
-              (when (pos? lag)
-                (log/warn "Falling behind" ::event-log "at:" next-offset "end:" end-offset)
+              (when (and (pos? lag))
+                (when (> lag batch-limit)
+                 (log/warn "Falling behind" ::event-log "at:" next-offset "end:" end-offset))
                 (recur)))))))
     (catch Exception e
       (log/error e "Unexpected failure while indexing"))))

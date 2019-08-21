@@ -1,6 +1,5 @@
 (ns avisi.crux.active-objects
   (:require [crux.db :as db]
-            [clojure.core.async :as async]
             [clojure.spec.alpha :as s]
             [crux.codec :as c]
             [crux.tx :as tx]

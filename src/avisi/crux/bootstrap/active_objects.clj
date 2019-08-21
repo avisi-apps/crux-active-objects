@@ -4,7 +4,6 @@
             [crux.bootstrap :as b]
             [crux.lru :as lru]
             [avisi.crux.active-objects :as ao-tx-log]
-            [clojure.core.async :as async]
             [crux.io :as cio]
             [clojure.tools.logging :as log])
   (:import [java.util Date]
@@ -73,51 +72,18 @@
                                :time @end-time}}]
           (log/debug "Event log consumer state:" (pr-str consumer-state))
           (db/store-index-meta indexer :crux.tx-log/consumer-state consumer-state)
+          (log/debug "Calling listeners" (keys @listeners))
           (run!
            (fn [[k f]]
              (try
                (f consumer-state)
                (catch Exception e
                  (log/error e "Calling listener failed" {:listener-key k}))))
-           listeners)
+           @listeners)
           (when (and (pos? lag))
             (when (> lag batch-limit)
               (log/warn "Falling behind" ::event-log "at:" next-offset "end:" end-offset))))))
     (Thread/sleep 50)))
-
-#_(defn start-event-log-consumer! ^Closeable [indexer tx-log]
-  (log/info "Starting event-log-consumer")
-
-  (when-not (db/read-index-meta indexer :crux.tx-log/consumer-state)
-    (db/store-index-meta
-     indexer
-     :crux.tx-log/consumer-state {:crux.tx/event-log {:lag 0
-                                                      :next-offset 0
-                                                      :time nil}}))
-
-  (let [stop-ch (async/chan 1)
-        input-ch  (:input-ch tx-log)
-        running? (atom true)]
-    (async/go-loop []
-      (let [[_ ch] (async/alts! [stop-ch input-ch (async/timeout 30000)])]
-        (if (= ch stop-ch)
-          (log/info "Stopped event listener")
-          (do
-            (log/debug "trigger event log consumer main loop")
-            (async/<! (async/thread (event-log-consumer-main-loop {:indexer indexer
-                                                                   :listeners @(:listeners tx-log)
-                                                                   :ao (:ao tx-log)
-                                                                   :running? running?})))
-            (recur)))))
-    (async/put! input-ch 1)
-    (log/info "Started event-log-consumer")
-    (reify Closeable
-      (close [_]
-        (reset! running? false)
-       ;; Put twice so it will block on the second stop message
-        (async/close! input-ch)
-        (async/>!! stop-ch :stop)
-        (async/>!! stop-ch :stop)))))
 
 (defn start-event-log-consumer! ^Closeable [indexer tx-log]
 
@@ -132,7 +98,7 @@
         worker-thread (doto (Thread. ^Runnable (fn [] (try
                                                         (event-log-consumer-main-loop
                                                          {:indexer indexer
-                                                          :listeners @(:listeners tx-log)
+                                                          :listeners (:listeners tx-log)
                                                           :ao (:ao tx-log)
                                                           :running? running?})
                                                         (catch Throwable t

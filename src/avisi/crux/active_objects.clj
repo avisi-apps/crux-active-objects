@@ -78,17 +78,15 @@
   (add-listener! [this key f])
   (remove-listener! [this key]))
 
-(defrecord ActiveObjectsTxLog [ao input-ch listeners]
+(defrecord ActiveObjectsTxLog [ao listeners]
   db/TxLog
   (submit-doc [this content-hash doc]
-    (save-event-log-entry! ao ::doc (.toString content-hash) doc)
-    (async/put! input-ch ::update-index))
+    (save-event-log-entry! ao ::doc (.toString content-hash) doc))
   (submit-tx [this tx-ops]
     (s/assert :crux.api/tx-ops tx-ops)
     (doseq [doc (crux.tx/tx-ops->docs tx-ops)]
       (db/submit-doc this (str (c/new-id doc)) doc))
     (let [m ^EventLogEntry (save-event-log-entry! ao ::tx nil (tx/tx-ops->tx-events tx-ops))]
-      (async/put! input-ch ::update-index)
       (delay {:crux.tx/tx-id (.getID m)
               :crux.tx/tx-time (Date. ^long (.getTime m))})))
   (new-tx-log-context [this]

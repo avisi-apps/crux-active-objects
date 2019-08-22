@@ -24,6 +24,7 @@
                                        (.order "ID DESC"))))))
 
 (def batch-limit 10000)
+(def idle-sleep-ms 100)
 
 (defn- event-log-consumer-main-loop [{:keys [indexer ^ActiveObjects ao running? listeners]}]
   (while @running?
@@ -83,7 +84,7 @@
           (when (and (pos? lag))
             (when (> lag batch-limit)
               (log/warn "Falling behind" ::event-log "at:" next-offset "end:" end-offset))))))
-    (Thread/sleep 50)))
+    (Thread/sleep idle-sleep-ms)))
 
 (defn start-event-log-consumer! ^Closeable [indexer tx-log]
 

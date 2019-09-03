@@ -26,7 +26,10 @@
   (pr-str x))
 
 (defn str->clj [^String x]
-  (edn/read-string x))
+  (try
+    (edn/read-string x)
+    (catch Exception e
+      (throw (ex-info "Failed to parse string to edn" {:failed-string x} e)))))
 
 (defn create! [^ActiveObjects ao ^Class clz fields]
   (.create ao ^Class clz ^Map fields))

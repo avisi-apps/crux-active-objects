@@ -98,17 +98,18 @@
   (let [running? (atom true)
         worker-thread (doto (Thread. ^Runnable (fn []
                                                  (loop []
-                                                  (try
-                                                    (event-log-consumer-main-loop
-                                                     {:indexer indexer
-                                                      :listeners (:listeners tx-log)
-                                                      :ao (:ao tx-log)
-                                                      :running? running?})
-                                                    (catch Throwable t
-                                                      (log/fatal t "Event log consumer threw exception, consumption has stopped, will try again in 20 seconds..")
-                                                      (when @running?
-                                                        (Thread/sleep 20000)
-                                                        (recur))))))
+                                                   (let [{:keys [thrown-exception]} (try
+                                                                                      (event-log-consumer-main-loop
+                                                                                       {:indexer indexer
+                                                                                        :listeners (:listeners tx-log)
+                                                                                        :ao (:ao tx-log)
+                                                                                        :running? running?})
+                                                                                      (catch Throwable t
+                                                                                        (log/fatal t "Event log consumer threw exception, consumption has stopped, will try again in 20 seconds..")
+                                                                                        {:thrown-exception t}))]
+                                                     (when thrown-exception
+                                                       (Thread/sleep 20000)
+                                                       (recur)))))
                                      "crux.tx.event-log-consumer-thread")
                         (.start))]
     (reify Closeable

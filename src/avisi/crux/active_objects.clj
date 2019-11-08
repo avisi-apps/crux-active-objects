@@ -37,10 +37,11 @@
   (.create ao ^Class clz ^Map fields))
 
 (defn get-existing-event-log-entries [^ActiveObjects ao content-hashes]
-  (seq (.find ao ^Class EventLogEntry
-              (-> (Query/select "ID, BODY, KEY")
-                  (.where (str "KEY IN (" (str/join ", " (repeat (count content-hashes) "?")) ")")
-                          (object-array content-hashes))))))
+  (when (seq content-hashes)
+    (seq (.find ao ^Class EventLogEntry
+                (-> (Query/select "ID, BODY, KEY")
+                    (.where (str "KEY IN (" (str/join ", " (repeat (count content-hashes) "?")) ")")
+                            (object-array content-hashes)))))))
 
 (>defn save-event-log-entry! ^EventLogEntry
        [^ActiveObjects ao topic k v existing-entries]

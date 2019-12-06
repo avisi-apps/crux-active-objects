@@ -101,8 +101,9 @@
                                      (conj m [(str (c/new-id doc)) doc]))
                                    []
                                    docs)
+          docs-batches (partition-all 500 (mapv first docs-with-hashes))
           existing (group-by #(.getKey ^EventLogEntry %)
-                             (get-existing-event-log-entries ao (mapv first docs-with-hashes)))]
+                             (mapcat #(get-existing-event-log-entries ao %) docs-batches))]
       (run! (fn [[hash doc]]
               (save-event-log-entry! ao ::doc (.toString hash) doc (get existing hash)))
             docs-with-hashes))

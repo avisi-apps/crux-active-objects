@@ -51,15 +51,21 @@
                                                                       :key (.getKey entry)
                                                                       :id (.getID entry)
                                                                       :tx-time tx-time})
-                         (case (.getTopic entry)
-                           "doc" (db/index-doc indexer
-                                               (.getKey entry)
-                                               (ao-tx-log/str->clj (.getBody entry)))
-                           "tx" (db/index-tx
-                                 indexer
-                                 (ao-tx-log/str->clj (.getBody entry))
-                                 tx-time
-                                 (.getID entry)))
+                         (try
+                           (let [body (.getBody entry)
+                                 clj-body (ao-tx-log/str->clj body)]
+                             (case (.getTopic entry)
+                               "doc" (db/index-doc indexer
+                                                   (.getKey entry)
+                                                   clj-body)
+                               "tx" (db/index-tx
+                                     indexer
+                                     clj-body
+                                     tx-time
+                                     (.getID entry))))
+                           (catch Exception e
+                             (log/error e "Failed to index event log entry" {:body (.getBody entry)
+                                                                             :id (.getID entry)})))
                          (vreset! end-time tx-time)
                          (vreset! ended-offset (.getID entry))))))))
       (log/debug "Done streaming from event-log to-offset=" (or @ended-offset start-offset))

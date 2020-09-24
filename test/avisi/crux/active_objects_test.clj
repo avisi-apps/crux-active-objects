@@ -40,6 +40,7 @@
 
     (t/testing "Compaction"
       (db/submit-docs doc-store [[doc-hash :some-val]])
+      (Thread/sleep 16)
       (t/is (= :some-val
               (-> (db/fetch-docs doc-store #{doc-hash})
                 (get doc-hash)))))

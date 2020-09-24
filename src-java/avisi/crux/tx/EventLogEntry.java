@@ -28,5 +28,9 @@ public interface EventLogEntry extends RawEntity<Long> {
     @Indexed
     @StringLength(100)
     String getKey();
+
+    @Default("0")
+    long getCompacted();
+    void setCompacted(Long compacted);
 }
 

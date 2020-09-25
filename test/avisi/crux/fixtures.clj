@@ -9,30 +9,10 @@
            [net.java.ao.atlassian TablePrefix AtlassianFieldNameConverter AtlassianUniqueNameConverter AtlassianSequenceNameConverter AtlassianIndexNameConverter AtlassianTableNameConverter]
            [net.java.ao.builder EntityManagerBuilder]
            [crux.api ICruxAPI]
-           [java.nio.file Files]
-           [java.nio.file.attribute FileAttribute]
-           [java.io File]
            [java.time Duration]))
-
-(defn with-tmp-dir* [prefix f]
-  (let [dir (.toFile (Files/createTempDirectory prefix (make-array FileAttribute 0)))]
-    (try
-      (f dir)
-      (finally
-        (cio/delete-dir dir)))))
-
-(defmacro with-tmp-dir [prefix [dir-binding] & body]
-  `(with-tmp-dir* ~prefix (fn [~(-> dir-binding (with-meta {:type File}))]
-                            ~@body)))
 
 (def ^:dynamic ^ICruxAPI *api*)
 (def ^:dynamic *opts* [])
-
-(defn with-opts
-  ([opts] (fn [f] (with-opts opts f)))
-  ([opts f]
-   (binding [*opts* (conj *opts* opts)]
-     (f))))
 
 (defn submit+await-tx
   ([tx-ops] (submit+await-tx *api* tx-ops))
@@ -68,12 +48,8 @@
                                      :crux/document-store {:crux/module `active-objects/->document-store
                                                            :active-objects :atlassian/active-objects}})]
         (binding [*api* standalone-node]
-          (f)
-          (Thread/sleep 16)))
+          (f)))
       (finally
+        ;; Otherwise we get errors about reading a deleted file sometimes
+        (Thread/sleep 100)
         (cio/delete-dir h2-dir)))))
-
-(comment
-  (test-ao)
-
-  )

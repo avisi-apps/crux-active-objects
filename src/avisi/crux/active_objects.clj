@@ -12,18 +12,18 @@
             [crux.io :as cio])
   (:import [com.atlassian.activeobjects.external ActiveObjects]
            [java.util Date Map]
-           [java.io Closeable]
            [net.java.ao Query]
            [avisi.crux.tx EventLogEntry]
            [crux.api ICursor]
-           [crux.codec EDNId Id]))
+           [crux.codec Id]
+           [java.io Closeable]
+           [java.lang AutoCloseable]))
 
 (s/def :atlassian.active-objects/instance #(instance? ActiveObjects %))
 
 (defn ->active-objects-config
   {::sys/args {:instance :atlassian.active-objects/instance}}
   [{:keys [instance] :as opts}]
-  (println opts)
   instance)
 
 ;; Do not increase over 500 or oracle DB's will run into trouble with a limit on IN statements
@@ -83,7 +83,7 @@
                              (-> (Query/select "ID, TOPIC, TIME, BODY, KEY")
                                (.limit batch-size)
                                (.order "ID ASC")
-                               (.where "ID >= ? AND TOPIC = ?" (into-array Object [start-offset "tx"])))))))]
+                               (.where "ID > ? AND TOPIC = ?" (into-array Object [start-offset "tx"])))))))]
      (concat ret (lazy-seq (tx-seq ao (inc (:crux.tx/tx-id (last ret))))))
      (concat))))
 
@@ -170,7 +170,7 @@
   (->> (->ActiveObjectsDocumentStore active-objects)
     (ds/->CachedDocumentStore (lru/new-cache doc-cache-size))))
 
-(defrecord ActiveObjectsTxLog [^ActiveObjects ao]
+(defrecord ActiveObjectsTxLog [^ActiveObjects ao ^Closeable tx-consumer]
   db/TxLog
   (submit-tx [this tx-events]
     (let [m ^EventLogEntry (insert-event! ao nil (crux-ids->strs tx-events) ::tx)]
@@ -182,11 +182,14 @@
       (fn [])
       (tx-seq ao (or after-tx-id 0))))
   (latest-submitted-tx [this]
-    {:crux.tx/tx-id (highest-id ao)}))
+    {:crux.tx/tx-id (highest-id ao)})
+  Closeable
+  (close [_]
+    (cio/try-close tx-consumer)))
 
 (defn ->ingest-only-tx-log {::sys/deps {:active-objects :atlassian/active-objects}}
   [{:keys [active-objects]}]
-  (->ActiveObjectsTxLog active-objects))
+  (map->ActiveObjectsTxLog {:ao active-objects}))
 
 (defn ->tx-log {::sys/deps (merge
                              (::sys/deps (meta #'tx/->polling-tx-consumer))
@@ -199,14 +202,3 @@
       (assoc :tx-consumer (tx/->polling-tx-consumer opts
                             (fn [after-tx-id]
                               (db/open-tx-log tx-log after-tx-id)))))))
-
-(comment
-  (c/new-id
-    (c/hex->id-buffer
-      "503f5b2f2ce3371cd67afb1405cc58966df93880"))
-
-  (-> "503f5b2f2ce3371cd67afb1405cc58966df93880" c/hex->id-buffer c/new-id)
-
-  (c/hex-id? "fdsfd")
-
-  )

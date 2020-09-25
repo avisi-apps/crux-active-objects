@@ -40,7 +40,6 @@
 
     (t/testing "Compaction"
       (db/submit-docs doc-store [[doc-hash :some-val]])
-      (Thread/sleep 16)
       (t/is (= :some-val
               (-> (db/fetch-docs doc-store #{doc-hash})
                 (get doc-hash)))))
@@ -56,18 +55,6 @@
       (t/is (= doc
               (-> (db/fetch-docs doc-store #{doc-hash})
                 (get doc-hash)))))))
-
-(t/deftest test-micro-bench
-  (when (Boolean/parseBoolean (System/getenv "CRUX_JDBC_PERFORMANCE"))
-    (let [n 1000
-          last-tx (atom nil)]
-      (time
-        (dotimes [n n]
-          (reset! last-tx (.submitTx *api* [[:crux.tx/put {:crux.db/id (keyword (str n))}]]))))
-
-      (time
-        (.awaitTx *api* last-tx nil))))
-  (t/is true))
 
 (t/deftest test-project-star-bug-1016
   (fix/submit+await-tx [[:crux.tx/put {:crux.db/id :put

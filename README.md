@@ -41,7 +41,7 @@ For more information about configuring Crux see: https://opencrux.com/reference/
 
 ## Releasing
 
-First make sure the pom is up-to-date run
+First make sure the pom is up-to-date run (make sure to set the activeobjects-core dep to provided):
 ```
 $ clojure -Spom
 ```

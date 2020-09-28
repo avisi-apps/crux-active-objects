@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>avisi-apps</groupId>
   <artifactId>crux-active-objects</artifactId>
-  <version>1.0.3</version>
+  <version>1.1.0</version>
   <name>crux-active-objects</name>
   <dependencies>
     <dependency>
@@ -15,6 +15,7 @@
       <groupId>com.atlassian.activeobjects</groupId>
       <artifactId>activeobjects-core</artifactId>
       <version>2.0.0</version>
+      <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>juxt</groupId>
@@ -23,7 +24,7 @@
     </dependency>
   </dependencies>
   <build>
-    <sourceDirectory>src-java</sourceDirectory>
+    <sourceDirectory>src</sourceDirectory>
     <resources>
       <resource>
         <directory>src</directory>

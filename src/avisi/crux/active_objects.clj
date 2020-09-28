@@ -1,25 +1,46 @@
 (ns avisi.crux.active-objects
   (:require [crux.db :as db]
             [clojure.spec.alpha :as s]
+            [crux.system :as sys]
             [crux.codec :as c]
             [crux.tx :as tx]
-            [ghostwheel.core :refer [>defn => | <- ?]]
             [clojure.tools.logging :as log]
             [clojure.edn :as edn]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [crux.lru :as lru]
+            [crux.document-store :as ds]
+            [crux.io :as cio])
   (:import [com.atlassian.activeobjects.external ActiveObjects]
            [java.util Date Map]
-           [java.io Closeable]
            [net.java.ao Query]
-           [avisi.crux.tx EventLogEntry]))
+           [avisi.crux.tx EventLogEntry]
+           [crux.api ICursor]
+           [crux.codec Id]
+           [java.io Closeable]
+           [java.lang AutoCloseable]))
 
-(def batch-size 1000)
+(s/def :atlassian.active-objects/instance #(instance? ActiveObjects %))
+
+(defn ->active-objects-config
+  {::sys/args {:instance :atlassian.active-objects/instance}}
+  [{:keys [instance] :as opts}]
+  instance)
+
+;; Do not increase over 500 or oracle DB's will run into trouble with a limit on IN statements
+(def batch-size 500)
 
 (s/def ::ao #(instance? ActiveObjects %))
 (s/def ::event-log-entry #(instance? EventLogEntry %))
 (s/def ::key (s/nilable (s/and string? #(<= (count %) 100))))
 (s/def ::body any?)
 (s/def ::existing-entries (s/nilable (s/coll-of ::event-log-entry)))
+
+(defn crux-ids->strs [tx-events]
+  (mapv (fn [tx-event]
+          (mapv
+            (fn [x]
+              (cond-> x
+                (instance? Id x) str)) tx-event)) tx-events))
 
 (defn- now ^Date []
   (Date.))
@@ -39,90 +60,145 @@
 (defn get-existing-event-log-entries [^ActiveObjects ao content-hashes]
   (when (seq content-hashes)
     (seq (.find ao ^Class EventLogEntry
-                (-> (Query/select "ID, BODY, KEY")
-                    (.where (str "KEY IN (" (str/join ", " (repeat (count content-hashes) "?")) ")")
-                            (object-array content-hashes)))))))
-
-(>defn save-event-log-entry! ^EventLogEntry
-       [^ActiveObjects ao topic k v existing-entries]
-       [::ao #{::tx ::doc} ::key ::body ::existing-entries => ::event-log-entry]
-       (log/debug "Save event log entry!" {:topic topic
-                                           :k k
-                                           :v v})
-  (let [body (clj->str v)
-        t ^long (.getTime (now))
-        payload ^Map (cond-> {"BODY" (clj->str v)
-                              "TOPIC" (name topic)
-                              "TIME" t}
-                             k (assoc "KEY" k))]
-    (when existing-entries
-      (run!
-       (fn [^EventLogEntry existing]
-         (when (not= (.getBody ^EventLogEntry existing) body)
-           (doto existing
-             (.setBody body)
-             (.save))))
-       existing-entries))
-    (when (or (nil? existing-entries)
-              (tx/evicted-doc? v))
-      (create! ao EventLogEntry payload))))
+           (-> (Query/select "ID, BODY, KEY")
+             (.where (str "KEY IN (" (str/join ", " (repeat (count content-hashes) "?")) ")")
+               (object-array content-hashes)))))))
 
 (defn event-log-entry->crux-tx [^EventLogEntry e]
   {:crux.tx/tx-time (Date. ^long (.getTime e))
    :crux.tx/tx-id (.getID e)
-   :crux.api/tx-ops (str->clj (.getBody e))})
+   :crux.tx.event/tx-events
+   (->> (str->clj (.getBody e))
+     (mapv (fn [tx-event]
+             (mapv #(cond-> %
+                      (and (string? %) (c/hex-id? %)) (-> c/hex->id-buffer c/new-id)) tx-event))))})
 
 (defn tx-seq
-  ([ao] (tx-seq ao 0))
   ([^ActiveObjects ao start-offset]
-   (when-let [ret (seq (map
-                        event-log-entry->crux-tx
-                        (seq
-                         (.find ao
-                                EventLogEntry
-                                (-> (Query/select "ID, TOPIC, TIME, BODY, KEY")
-                                    (.limit batch-size)
-                                    (.order "ID ASC")
-                                    (.where "ID >= ? AND TOPIC = ?" (into-array Object [start-offset "tx"])))))))]
-     (concat ret (lazy-seq (tx-seq ao (inc (:crux.tx/tx-id (last ret)))))))))
+   (if-let [ret (seq (map
+                         event-log-entry->crux-tx
+                         (seq
+                           (.find ao
+                             EventLogEntry
+                             (-> (Query/select "ID, TOPIC, TIME, BODY, KEY")
+                               (.limit batch-size)
+                               (.order "ID ASC")
+                               (.where "ID > ? AND TOPIC = ?" (into-array Object [start-offset "tx"])))))))]
+     (concat ret (lazy-seq (tx-seq ao (inc (:crux.tx/tx-id (last ret))))))
+     (concat))))
 
-(defprotocol TxListener
-  (add-listener! [this key f])
-  (remove-listener! [this key]))
+(defn get-docs-by-event-keys
+  ([^ActiveObjects ao event-keys]
+   (get-docs-by-event-keys ao event-keys true))
+  ([^ActiveObjects ao event-keys include-compacted?]
+   (when (seq event-keys)
+     (seq (.find ao ^Class EventLogEntry
+            (-> (Query/select "ID, BODY, KEY")
+              (.where (cond-> (str "KEY IN (" (str/join ", " (repeat (count event-keys) "?")) ")")
+                        (not include-compacted?) (str " AND COMPACTED = 0"))
+                (object-array event-keys))))))))
 
-(defrecord ActiveObjectsTxLog [^ActiveObjects ao listeners]
+(defn docs-by-event-key [^ActiveObjects ao k]
+  (seq
+    (.find ao ^Class EventLogEntry
+      (-> (Query/select "ID")
+        (.where "KEY = ? AND COMPACTED = 0" (into-array [k]))))))
+
+(defn insert-event! [^ActiveObjects ao event-key v topic]
+  (log/debug "Save event log entry!" {:topic topic
+                                      :event-key event-key
+                                      :v v})
+  (let [t ^long (.getTime (now))
+        payload ^Map (cond-> {"BODY" (clj->str v)
+                              "TOPIC" (name topic)
+                              "TIME" t
+                              "COMPACTED" 0}
+                       event-key (assoc "KEY" (str event-key)))]
+    (create! ao EventLogEntry payload)))
+
+(defn doc-exists? [^ActiveObjects ao k]
+  (not-empty (docs-by-event-key ao k)))
+
+(defn update-doc! [^ActiveObjects ao k doc]
+  (->> (docs-by-event-key ao k)
+    (run! (fn [^EventLogEntry entry]
+            (doto entry
+              (.setBody (clj->str doc))
+              (.save ))))))
+
+(defn evict-doc! [^ActiveObjects ao k tombstone]
+  (->> (docs-by-event-key ao k)
+    (run! (fn [^EventLogEntry entry]
+            (doto entry
+              (.setBody (clj->str tombstone))
+              (.setCompacted 1)
+              (.save))))))
+
+(defn highest-id [^ActiveObjects ao]
+  (first
+    (map
+      (fn [^EventLogEntry tx] (.getID tx))
+      (.find ao ^Class EventLogEntry (-> (Query/select "ID")
+                                       (.limit 1)
+                                       (.order "ID DESC"))))))
+
+(defrecord ActiveObjectsDocumentStore [^ActiveObjects ao]
+  db/DocumentStore
+  (submit-docs [this id-and-docs]
+    (doseq [[id doc] id-and-docs
+            :let [id (str id)]]
+      (if (c/evicted-doc? doc)
+        (do
+          (insert-event! ao id doc "docs")
+          (evict-doc! ao id doc))
+        (if-not (doc-exists? ao id)
+          (insert-event! ao id doc "docs")
+          (update-doc! ao id doc)))))
+  (fetch-docs [this ids]
+    (->>
+      (for [id-batch (partition-all batch-size ids)
+            row  (get-docs-by-event-keys ao (map (comp str c/new-id) id-batch) false)]
+        row)
+      (map (juxt
+             (fn [^EventLogEntry entry] (-> (.getKey entry) c/hex->id-buffer c/new-id))
+             (fn [^EventLogEntry entry] (str->clj (.getBody entry)))))
+      (into {}))))
+
+(defn ->document-store {::sys/deps {:active-objects :atlassian/active-objects}
+                        ::sys/args {:doc-cache-size ds/doc-cache-size-opt}}
+  [{:keys [doc-cache-size active-objects]}]
+  (->> (->ActiveObjectsDocumentStore active-objects)
+    (ds/->CachedDocumentStore (lru/new-cache doc-cache-size))))
+
+(defrecord ActiveObjectsTxLog [^ActiveObjects ao ^Closeable tx-consumer]
   db/TxLog
-  (submit-doc [this content-hash doc]
-    (save-event-log-entry! ao ::doc (.toString content-hash) doc (get-existing-event-log-entries ao [content-hash])))
-  (submit-tx [this tx-ops]
-    (s/assert :crux.api/tx-ops tx-ops)
-    (let [docs (crux.tx/tx-ops->docs tx-ops)
-          docs-with-hashes (reduce (fn [m doc]
-                                     (conj m [(str (c/new-id doc)) doc]))
-                                   []
-                                   docs)
-          docs-batches (partition-all 500 (mapv first docs-with-hashes))
-          existing (group-by #(.getKey ^EventLogEntry %)
-                             (mapcat #(get-existing-event-log-entries ao %) docs-batches))]
-      (run! (fn [[hash doc]]
-              (save-event-log-entry! ao ::doc (.toString hash) doc (get existing hash)))
-            docs-with-hashes))
-    (let [m ^EventLogEntry (save-event-log-entry! ao ::tx nil (tx/tx-ops->tx-events tx-ops) nil)]
+  (submit-tx [this tx-events]
+    (let [m ^EventLogEntry (insert-event! ao nil (crux-ids->strs tx-events) ::tx)]
       (when m
         (delay {:crux.tx/tx-id (.getID m)
                 :crux.tx/tx-time (Date. ^long (.getTime m))}))))
-  (new-tx-log-context [this]
-    (reify Closeable
-      (close [this])))
-  (tx-log [this tx-log-context from-tx-id]
-    (tx-seq ao (or from-tx-id 0)))
-  TxListener
-  (add-listener! [this k f]
-    (swap! listeners assoc k f)
-    nil)
-  (remove-listener! [this k]
-    (swap! listeners dissoc k)
-    nil)
+  (open-tx-log ^ICursor [this after-tx-id]
+    (cio/->cursor
+      (fn [])
+      (tx-seq ao (or after-tx-id 0))))
+  (latest-submitted-tx [this]
+    {:crux.tx/tx-id (highest-id ao)})
   Closeable
-  (close [this]
-    (.flushAll ao)))
+  (close [_]
+    (cio/try-close tx-consumer)))
+
+(defn ->ingest-only-tx-log {::sys/deps {:active-objects :atlassian/active-objects}}
+  [{:keys [active-objects]}]
+  (map->ActiveObjectsTxLog {:ao active-objects}))
+
+(defn ->tx-log {::sys/deps (merge
+                             (::sys/deps (meta #'tx/->polling-tx-consumer))
+                             (::sys/deps (meta #'->ingest-only-tx-log)))
+                ::sys/args (merge (::sys/args (meta #'tx/->polling-tx-consumer))
+                                  (::sys/args (meta #'->ingest-only-tx-log)))}
+  [opts]
+  (let [tx-log (->ingest-only-tx-log opts)]
+    (-> tx-log
+      (assoc :tx-consumer (tx/->polling-tx-consumer opts
+                            (fn [after-tx-id]
+                              (db/open-tx-log tx-log after-tx-id)))))))

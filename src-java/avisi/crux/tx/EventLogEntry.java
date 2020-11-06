@@ -4,6 +4,10 @@ import net.java.ao.RawEntity;
 import net.java.ao.schema.*;
 
 @Table("EventLogEntry")
+@Indexes({
+        @Index(name = "key_compacted", methodNames = {"getKey", "getCompacted"}),
+        @Index(name = "id_topic", methodNames = {"getId", "getTopic"})
+})
 public interface EventLogEntry extends RawEntity<Long> {
 
     String ID = "ID";

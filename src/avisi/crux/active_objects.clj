@@ -95,14 +95,14 @@
      (seq (.find ao ^Class EventLogEntry
             (-> (Query/select "ID, BODY, KEY")
               (.where (cond-> (str "KEY IN (" (str/join ", " (repeat (count event-keys) "?")) ")")
-                        (not include-compacted?) (str " AND COMPACTED = 0"))
+                        (not include-compacted?) (str " AND (COMPACTED = 0 OR COMPACTED IS NULL)"))
                 (object-array event-keys))))))))
 
 (defn docs-by-event-key [^ActiveObjects ao k]
   (seq
     (.find ao ^Class EventLogEntry
       (-> (Query/select "ID")
-        (.where "KEY = ? AND COMPACTED = 0" (into-array [k]))))))
+        (.where "KEY = ? AND (COMPACTED = 0 OR COMPACTED IS NULL)" (into-array [k]))))))
 
 (defn insert-event! [^ActiveObjects ao event-key v topic]
   (log/debug "Save event log entry!" {:topic topic

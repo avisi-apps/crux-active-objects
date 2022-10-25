@@ -68,14 +68,19 @@
   {:crux.tx/tx-time (Date. ^long (.getTime e))
    :crux.tx/tx-id (.getID e)
    :crux.tx.event/tx-events
-   (->> (str->clj (.getBody e))
-     (mapv (fn [tx-event]
-             (mapv #(cond-> %
-                      (and (string? %) (c/hex-id? %)) (-> c/hex->id-buffer c/new-id)) tx-event))))})
+   (try
+     (->> (str->clj (.getBody e))
+          (mapv (fn [tx-event]
+                  (mapv #(cond-> %
+                                 (and (string? %) (c/hex-id? %)) (-> c/hex->id-buffer c/new-id)) tx-event))))
+     (catch Exception error
+       (log/error error "Failed to read event log entry" {:body (.getBody e)
+                                                          :id (.getID e)})
+       []))})
 
 (defn tx-seq
   ([^ActiveObjects ao start-offset]
-   (if-let [ret (seq (map
+   (if-let [ret (seq (keep
                          event-log-entry->crux-tx
                          (seq
                            (.find ao
@@ -159,9 +164,14 @@
       (for [id-batch (partition-all batch-size ids)
             row  (get-docs-by-event-keys ao (map (comp str c/new-id) id-batch) false)]
         row)
-      (map (juxt
-             (fn [^EventLogEntry entry] (-> (.getKey entry) c/hex->id-buffer c/new-id))
-             (fn [^EventLogEntry entry] (str->clj (.getBody entry)))))
+      (keep (fn [^EventLogEntry entry]
+              (try
+                [(-> (.getKey entry) c/hex->id-buffer c/new-id)
+                 (str->clj (.getBody entry))]
+                (catch Exception e
+                  (log/error e "Failed to read event log entry" {:body (.getBody entry)
+                                                                 :id (.getID entry)})
+                  nil))))
       (into {}))))
 
 (defn ->document-store {::sys/deps {:active-objects :atlassian/active-objects}
